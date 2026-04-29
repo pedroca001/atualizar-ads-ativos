@@ -1,5 +1,7 @@
 """
-FB Ad Library counter scraper - versão com debug.
+FB Ad Library counter scraper - estratégia robusta:
+- aguarda networkidle (FB para de fazer requests AJAX = página estabilizou)
+- só aceita "0 anúncios" depois desse estabilizar
 """
 
 import os
@@ -13,8 +15,6 @@ from playwright.sync_api import sync_playwright
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 TABLE = "ofertas"
-DEBUG = os.environ.get("DEBUG", "1") == "1"
-MAX_DEBUG = 5  # limita quantas ofertas vão imprimir debug detalhado
 
 COUNT_PATTERNS = [
     r"~?\s*([\d.,\u00a0\s]+)\s+r[eé]sultats?",
@@ -41,53 +41,55 @@ def parse_count(text: str):
     return None
 
 
-debug_count = 0
-
-
-def scrape_one(page, url: str, idx: int, retries: int = 2):
-    global debug_count
+def scrape_one(page, url: str, retries: int = 2):
+    """
+    Estratégia:
+    1. Carrega a página
+    2. Espera networkidle (FB para de fazer fetches = conteúdo real carregou)
+    3. Só DEPOIS lê o texto e extrai o número
+    """
     last_error = None
     for attempt in range(retries + 1):
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=45000)
 
+            # 1) garante body
             try:
                 page.wait_for_selector("body", timeout=10000)
             except Exception:
                 pass
 
+            # 2) ESPERA O FACEBOOK PARAR DE FAZER REQUESTS.
+            # networkidle = nenhum request AJAX há 500ms.
+            # Isso é o sinal de que a busca de anúncios terminou.
             try:
-                page.wait_for_function(
-                    """() => {
-                        const body = document && document.body;
-                        if (!body) return false;
-                        const t = body.innerText || '';
-                        if (/\\d[\\d.,\\u00a0\\s]*\\s+(r[eé]sultats?|resultados?|results?|ergebnisse|risultati)/i.test(t)) return true;
-                        if (/(no\\s+ads\\s+match|aucune?\\s+annonce|nenhum\\s+anúncio|ningún\\s+anuncio|nessun\\s+annuncio|keine\\s+anzeigen)/i.test(t)) return true;
-                        return false;
-                    }""",
-                    timeout=20000,
-                )
+                page.wait_for_load_state("networkidle", timeout=20000)
             except Exception:
-                page.wait_for_timeout(3000)
+                # se não chegar em networkidle em 20s, segue mesmo assim
+                pass
 
+            # 3) tempo extra de segurança
+            page.wait_for_timeout(2000)
+
+            # 4) tenta extrair o número
             text = page.locator("body").inner_text()
             count = parse_count(text)
             if count is not None:
                 return count
 
-            # DEBUG: imprime amostra do texto pra entender o que tá vindo
-            if DEBUG and debug_count < MAX_DEBUG:
-                debug_count += 1
-                snippet = text[:600].replace("\n", " | ")
-                print(f"   🔍 DEBUG idx={idx}: count=None | text[:600]={snippet!r}", file=sys.stderr)
-                # também imprime a URL final (pra detectar redirect pra login)
-                print(f"   🔍 DEBUG url_final={page.url}", file=sys.stderr)
+            # 5) número não apareceu? Tenta esperar mais 5s e relê
+            # (FB pode estar lento)
+            page.wait_for_timeout(5000)
+            text = page.locator("body").inner_text()
+            count = parse_count(text)
+            if count is not None:
+                return count
 
+            # 6) só agora aceita "sem anúncios" — depois do networkidle e dois retries
             if EMPTY_PATTERNS.search(text):
                 return 0
 
-            last_error = "padrão de contagem não encontrado"
+            last_error = "número não apareceu mesmo após networkidle"
 
         except Exception as e:
             last_error = str(e)[:200]
@@ -135,22 +137,16 @@ def main():
             viewport={"width": 1366, "height": 800},
             locale="pt-BR",
         )
-        context.route(
-            "**/*",
-            lambda route: route.abort()
-            if route.request.resource_type in ("image", "media", "font")
-            else route.continue_(),
-        )
+        # IMPORTANTE: NÃO bloqueia mais image/media/font porque queremos
+        # que o networkidle inclua todos os requests. Bloquear iria criar
+        # falsos networkidle.
+        # (Removido o context.route)
 
         page = context.new_page()
 
-        # DEBUG: pra primeira oferta, imprime mais informação ainda
         for idx, (row_id, url) in enumerate(targets, 1):
             print(f"[{idx}/{len(targets)}] {row_id}")
-            if idx == 1 and DEBUG:
-                print(f"   🔍 URL: {url}", file=sys.stderr)
-
-            count = scrape_one(page, url, idx)
+            count = scrape_one(page, url)
             if count is None:
                 fail += 1
                 continue
@@ -161,14 +157,11 @@ def main():
             print(f"   ✅ {count} anúncios ativos")
             ok += 1
 
-            # PARA NA 5a OFERTA pra economizar tempo durante debug
-            if DEBUG and idx >= 5:
-                print("\n🛑 DEBUG MODE: parando em 5 ofertas pra você analisar o output")
-                break
-
         browser.close()
 
     print(f"\n🏁 Concluído: {ok} ok, {fail} falhas")
+    if targets and fail / len(targets) > 0.3:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
