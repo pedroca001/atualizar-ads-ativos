@@ -10,30 +10,26 @@ import json
 import time
 import sys
 from supabase import create_client
-from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+from playwright.sync_api import sync_playwright
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]  # use service_role pra UPDATE
+SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 TABLE = "ofertas"
 
-# regex que captura "~4,700 resultados", "About 12,500 results", "~71 résultats", etc.
 COUNT_PATTERNS = [
-    r"~?\s*([\d.,\u00a0\s]+)\s+r[eé]sultats?",     # FR
-    r"~?\s*([\d.,\u00a0\s]+)\s+resultados?",       # PT/ES
-    r"(?:about\s+|~)?\s*([\d.,\u00a0\s]+)\s+results?",  # EN
-    r"~?\s*([\d.,\u00a0\s]+)\s+ergebnisse",        # DE
-    r"~?\s*([\d.,\u00a0\s]+)\s+risultati",         # IT
+    r"~?\s*([\d.,\u00a0\s]+)\s+r[eé]sultats?",
+    r"~?\s*([\d.,\u00a0\s]+)\s+resultados?",
+    r"(?:about\s+|~)?\s*([\d.,\u00a0\s]+)\s+results?",
+    r"~?\s*([\d.,\u00a0\s]+)\s+ergebnisse",
+    r"~?\s*([\d.,\u00a0\s]+)\s+risultati",
 ]
 
 
 def parse_count(text: str):
-    """Acha o primeiro match de '~N resultados' no texto da página."""
     for pattern in COUNT_PATTERNS:
         m = re.search(pattern, text, re.IGNORECASE)
         if m:
-            raw = m.group(1)
-            # remove tudo que não for dígito (vírgula, ponto, nbsp, espaço)
-            digits = re.sub(r"\D", "", raw)
+            digits = re.sub(r"\D", "", m.group(1))
             if digits:
                 return int(digits)
     return None
@@ -41,38 +37,52 @@ def parse_count(text: str):
 
 def scrape_one(page, url: str, retries: int = 2):
     """Abre a URL e tenta extrair o contador. Retorna int ou None."""
+    last_error = None
     for attempt in range(retries + 1):
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=45000)
 
-            # Tenta esperar pelo elemento que tem 'resultado' / 'result' / 'résultat'
+            # garante que o body existe antes de qualquer coisa
+            try:
+                page.wait_for_selector("body", timeout=10000)
+            except Exception:
+                pass
+
+            # espera o JS renderizar o contador. Predicate defensivo:
+            # checa se body existe antes de ler innerText.
             try:
                 page.wait_for_function(
                     """() => {
-                        const t = document.body.innerText;
+                        const body = document && document.body;
+                        if (!body) return false;
+                        const t = body.innerText || '';
                         return /\\d[\\d.,\\u00a0\\s]*\\s+(r[eé]sultats?|resultados?|results?|ergebnisse|risultati)/i.test(t);
                     }""",
-                    timeout=15000,
+                    timeout=25000,
                 )
-            except PWTimeout:
-                # fallback: dorme um pouco e tenta mesmo assim
-                page.wait_for_timeout(4000)
+            except Exception:
+                # fallback: dá um tempo extra e tenta extrair mesmo assim
+                page.wait_for_timeout(5000)
 
             text = page.locator("body").inner_text()
             count = parse_count(text)
             if count is not None:
                 return count
 
-            # nenhum match? Pode ser "Nenhum anúncio corresponde"
-            if re.search(r"(no\s+ads|aucun|nenhum|ningún)", text, re.IGNORECASE):
+            # nenhum match? Verifica se a página diz "sem anúncios"
+            if re.search(r"(no\s+ads|aucun|nenhum|ningún|ningun)", text, re.IGNORECASE):
                 return 0
 
-        except Exception as e:
-            print(f"   tentativa {attempt + 1} falhou: {e}", file=sys.stderr)
-            if attempt < retries:
-                time.sleep(3)
-                continue
+            last_error = "padrão de contagem não encontrado no texto da página"
 
+        except Exception as e:
+            last_error = str(e)[:200]
+
+        if attempt < retries:
+            print(f"   tentativa {attempt + 1} falhou: {last_error}", file=sys.stderr)
+            time.sleep(3)
+
+    print(f"   ❌ desistindo após {retries + 1} tentativas: {last_error}", file=sys.stderr)
     return None
 
 
@@ -82,7 +92,6 @@ def main():
     rows = sb.table(TABLE).select("id, oferta_data").execute().data
     print(f"📦 {len(rows)} ofertas no Supabase")
 
-    # monta lista (id, url) ignorando linhas sem linkBiblioteca
     targets = []
     for row in rows:
         data = row["oferta_data"]
@@ -112,7 +121,7 @@ def main():
             viewport={"width": 1366, "height": 800},
             locale="pt-BR",
         )
-        # bloqueia recursos pesados pra acelerar (imagens, fonts, vídeos)
+        # bloqueia recursos pesados pra acelerar
         context.route(
             "**/*",
             lambda route: route.abort()
@@ -126,7 +135,6 @@ def main():
             print(f"[{idx}/{len(targets)}] {row_id}")
             count = scrape_one(page, url)
             if count is None:
-                print("   ❌ não consegui extrair o contador")
                 fail += 1
                 continue
 
@@ -139,7 +147,6 @@ def main():
         browser.close()
 
     print(f"\n🏁 Concluído: {ok} ok, {fail} falhas")
-    # falha o job se mais de 30% das ofertas falharam
     if targets and fail / len(targets) > 0.3:
         sys.exit(1)
 
