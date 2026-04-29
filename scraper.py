@@ -24,6 +24,12 @@ COUNT_PATTERNS = [
     r"~?\s*([\d.,\u00a0\s]+)\s+risultati",
 ]
 
+EMPTY_PATTERNS = re.compile(
+    r"(no\s+ads\s+match|aucune?\s+annonce|nenhum\s+anúncio|"
+    r"ningún\s+anuncio|nessun\s+annuncio|keine\s+anzeigen)",
+    re.IGNORECASE,
+)
+
 
 def parse_count(text: str):
     for pattern in COUNT_PATTERNS:
@@ -42,27 +48,30 @@ def scrape_one(page, url: str, retries: int = 2):
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=45000)
 
-            # garante que o body existe antes de qualquer coisa
+            # garante que o body existe
             try:
                 page.wait_for_selector("body", timeout=10000)
             except Exception:
                 pass
 
-            # espera o JS renderizar o contador. Predicate defensivo:
-            # checa se body existe antes de ler innerText.
+            # espera o JS renderizar UM dos dois: contador OU mensagem de "sem resultados".
+            # O que vier primeiro libera. Isso evita esperar 25s em ofertas com 0 anúncios.
             try:
                 page.wait_for_function(
                     """() => {
                         const body = document && document.body;
                         if (!body) return false;
                         const t = body.innerText || '';
-                        return /\\d[\\d.,\\u00a0\\s]*\\s+(r[eé]sultats?|resultados?|results?|ergebnisse|risultati)/i.test(t);
+                        // achou um número de resultados?
+                        if (/\\d[\\d.,\\u00a0\\s]*\\s+(r[eé]sultats?|resultados?|results?|ergebnisse|risultati)/i.test(t)) return true;
+                        // achou mensagem de "sem anúncios"?
+                        if (/(no\\s+ads\\s+match|aucune?\\s+annonce|nenhum\\s+anúncio|ningún\\s+anuncio|nessun\\s+annuncio|keine\\s+anzeigen)/i.test(t)) return true;
+                        return false;
                     }""",
-                    timeout=25000,
+                    timeout=15000,
                 )
             except Exception:
-                # fallback: dá um tempo extra e tenta extrair mesmo assim
-                page.wait_for_timeout(5000)
+                page.wait_for_timeout(2000)
 
             text = page.locator("body").inner_text()
             count = parse_count(text)
@@ -70,7 +79,7 @@ def scrape_one(page, url: str, retries: int = 2):
                 return count
 
             # nenhum match? Verifica se a página diz "sem anúncios"
-            if re.search(r"(no\s+ads|aucun|nenhum|ningún|ningun)", text, re.IGNORECASE):
+            if EMPTY_PATTERNS.search(text):
                 return 0
 
             last_error = "padrão de contagem não encontrado no texto da página"
