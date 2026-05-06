@@ -67,6 +67,23 @@ def cleanup_old_history(sb):
     sb.table(HISTORY_TABLE).delete().lt("lido_em", cutoff.isoformat()).execute()
 
 
+def fetch_offer_rows(sb):
+    result = sb.table(TABLE).select("id, oferta_data, link_biblioteca").execute()
+    return result.data
+
+
+def update_current_count(sb, row_id, count, read_at):
+    try:
+        sb.table(TABLE).update(
+            {
+                "anuncios_ativos": count,
+                "anuncios_ativos_atualizado_em": read_at,
+            }
+        ).eq("id", row_id).execute()
+    except Exception:
+        sb.table(TABLE).update({"anuncios_ativos": count}).eq("id", row_id).execute()
+
+
 def scrape_one(page, url: str, retries: int = 2):
     """
     Estratégia:
@@ -131,7 +148,10 @@ def scrape_one(page, url: str, retries: int = 2):
 def main():
     sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-    rows = sb.table(TABLE).select("id, oferta_data, link_biblioteca").execute().data
+    try:
+        rows = fetch_offer_rows(sb)
+    except Exception:
+        rows = sb.table(TABLE).select("id, oferta_data").execute().data
     print(f"📦 {len(rows)} ofertas no Supabase")
 
     targets = []
@@ -190,13 +210,11 @@ def main():
                 fail += 1
                 continue
 
-            sb.table(TABLE).update(
-                {
-                    "anuncios_ativos": count,
-                    "anuncios_ativos_atualizado_em": read_at,
-                }
-            ).eq("id", row_id).execute()
-            record_reading(sb, row_id, url, count, read_at)
+            update_current_count(sb, row_id, count, read_at)
+            try:
+                record_reading(sb, row_id, url, count, read_at)
+            except Exception as e:
+                print(f"   falha ao registrar leitura: {str(e)[:200]}", file=sys.stderr)
             print(f"   ✅ {count} anúncios ativos")
             ok += 1
 
