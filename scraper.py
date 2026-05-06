@@ -9,12 +9,15 @@ import re
 import json
 import time
 import sys
+from datetime import datetime, timedelta, timezone
 from supabase import create_client
 from playwright.sync_api import sync_playwright
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 TABLE = "ofertas"
+HISTORY_TABLE = "oferta_ads_leituras"
+HISTORY_RETENTION_DAYS = 7
 
 COUNT_PATTERNS = [
     r"~?\s*([\d.,\u00a0\s]+)\s+r[eé]sultats?",
@@ -39,6 +42,29 @@ def parse_count(text: str):
             if digits:
                 return int(digits)
     return None
+
+
+def utc_now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def record_reading(sb, row_id, url, count, read_at, status="success", error=None):
+    sb.table(HISTORY_TABLE).insert(
+        {
+            "oferta_id": row_id,
+            "anuncios_ativos": count,
+            "lido_em": read_at,
+            "fonte": "github_actions",
+            "link_biblioteca": url,
+            "status": status,
+            "erro": error,
+        }
+    ).execute()
+
+
+def cleanup_old_history(sb):
+    cutoff = datetime.now(timezone.utc) - timedelta(days=HISTORY_RETENTION_DAYS)
+    sb.table(HISTORY_TABLE).delete().lt("lido_em", cutoff.isoformat()).execute()
 
 
 def scrape_one(page, url: str, retries: int = 2):
@@ -105,15 +131,15 @@ def scrape_one(page, url: str, retries: int = 2):
 def main():
     sb = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-    rows = sb.table(TABLE).select("id, oferta_data").execute().data
+    rows = sb.table(TABLE).select("id, oferta_data, link_biblioteca").execute().data
     print(f"📦 {len(rows)} ofertas no Supabase")
 
     targets = []
     for row in rows:
-        data = row["oferta_data"]
+        data = row.get("oferta_data")
         if isinstance(data, str):
             data = json.loads(data)
-        link = (data or {}).get("linkBiblioteca")
+        link = row.get("link_biblioteca") or (data or {}).get("linkBiblioteca")
         if link:
             targets.append((row["id"], link))
 
@@ -146,18 +172,41 @@ def main():
 
         for idx, (row_id, url) in enumerate(targets, 1):
             print(f"[{idx}/{len(targets)}] {row_id}")
+            read_at = utc_now_iso()
             count = scrape_one(page, url)
             if count is None:
+                try:
+                    record_reading(
+                        sb,
+                        row_id,
+                        url,
+                        None,
+                        read_at,
+                        status="failed",
+                        error="contador nao encontrado",
+                    )
+                except Exception as e:
+                    print(f"   falha ao registrar leitura: {str(e)[:200]}", file=sys.stderr)
                 fail += 1
                 continue
 
-            sb.table(TABLE).update({"anuncios_ativos": count}).eq(
-                "id", row_id
-            ).execute()
+            sb.table(TABLE).update(
+                {
+                    "anuncios_ativos": count,
+                    "anuncios_ativos_atualizado_em": read_at,
+                }
+            ).eq("id", row_id).execute()
+            record_reading(sb, row_id, url, count, read_at)
             print(f"   ✅ {count} anúncios ativos")
             ok += 1
 
         browser.close()
+
+    try:
+        cleanup_old_history(sb)
+        print(f"🧹 histórico com mais de {HISTORY_RETENTION_DAYS} dias apagado")
+    except Exception as e:
+        print(f"⚠️ falha ao limpar histórico antigo: {str(e)[:200]}", file=sys.stderr)
 
     print(f"\n🏁 Concluído: {ok} ok, {fail} falhas")
     if targets and fail / len(targets) > 0.3:
