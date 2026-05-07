@@ -1,62 +1,65 @@
-# FB Ads Counter — Scraper gratuito da Biblioteca de Anúncios
+# FB Ads Counter - Scraper da Biblioteca de Anuncios
 
-Substitui o actor pago do Apify por um scraper próprio que roda em GitHub Actions.
-Pega só o **número de anúncios ativos** (`~4,700 resultados`) de cada oferta e
-atualiza a tabela `ofertas` do Supabase.
+Substitui o actor pago do Apify por um scraper proprio que roda em GitHub Actions.
+Pega o numero de anuncios ativos de cada oferta e atualiza o Supabase usado pelo
+DR Vault.
 
-**Custo:** R$ 0,00. Roda em ~3-5 min/dia. Free tier do GitHub cobre tranquilo.
+## 1. Configurar os secrets
 
----
-
-## 1. Subir o repositório
-
-```bash
-git init
-git add .
-git commit -m "scraper inicial"
-gh repo create fb-ads-scraper --private --source=. --push
-```
-
-(Se preferir, crie o repo manualmente em github.com e faça push.)
-
-## 2. Configurar os secrets
-
-No repo, vá em **Settings → Secrets and variables → Actions → New repository secret** e adicione:
+No repo, va em **Settings -> Secrets and variables -> Actions -> New repository secret**
+e adicione:
 
 | Nome | Valor |
 |---|---|
-| `SUPABASE_URL` | `https://SEU-PROJETO.supabase.co` |
-| `SUPABASE_SERVICE_KEY` | sua chave **service_role** (não a anon!) |
+| `SUPABASE_URL` | URL do projeto Supabase |
+| `SUPABASE_SERVICE_KEY` | chave `service_role` |
 
-⚠️ A `service_role` está em **Project Settings → API → service_role**. Ela bypassa RLS, por isso precisa ficar como secret e nunca commitada.
+Nao commitar secrets. A `service_role` bypassa RLS.
 
-## 3. Estrutura esperada da tabela `ofertas`
+## 2. Estrutura esperada no Supabase
 
-O script lê:
-- `id` (PK, qualquer tipo)
-- `oferta_data` (jsonb) — espera `{"linkBiblioteca": "https://..."}` dentro
-- `anuncios_ativos` (int) — coluna que será atualizada
+Tabela principal: `ofertas`.
 
-Se o nome do campo dentro do JSON for outro, edite a linha no `scraper.py`:
-```python
-link = (data or {}).get("linkBiblioteca")
+Campos principais lidos ou atualizados:
+
+- `id`
+- `oferta_data`
+- `link_biblioteca`
+- `anuncios_ativos`
+- `anuncios_ativos_atualizado_em`
+- `ads_monitoring_status`
+- `ads_zero_since`
+- `ads_last_positive_at`
+- `ads_inactivated_at`
+- `ads_next_check_at`
+
+Tabela de historico: `oferta_ads_leituras`.
+
+Antes de publicar esta alteracao em um projeto existente, rode o SQL em
+`supabase_ads_monitoring_cadence.sql` no Supabase SQL editor. Para setups novos,
+`supabase_ads_history.sql` ja contem o schema consolidado.
+
+## 3. Schedule
+
+O workflow roda todos os dias as **04:00, 12:00 e 20:00 de Brasilia**
+(`07:00, 15:00 e 23:00 UTC`):
+
+```yaml
+- cron: "0 7,15,23 * * *"
 ```
+
+O script decide quais ofertas entram no lote de cada horario:
+
+- ofertas ativas: verificadas nas 3 execucoes do dia;
+- ofertas com 0 ads por 2 dias: verificadas 1x/dia ao meio-dia;
+- ofertas com 0 ads por 7 dias: marcadas como inativas e verificadas 1x a cada 3 dias ao meio-dia;
+- se uma oferta volta a ter ads ativos, ela retorna automaticamente para o status ativo.
 
 ## 4. Testar manualmente
 
-Em **Actions → Daily FB Ads Counter → Run workflow**. Vai rodar agora e você
-acompanha os logs em tempo real.
+Em **Actions -> Daily FB Ads Counter -> Run workflow**.
 
-## 5. Schedule
-
-Roda automaticamente todo dia às **09:00 Brasília** (12:00 UTC).
-Pra mudar, edite o cron em `.github/workflows/scrape.yml`:
-
-```yaml
-- cron: "0 12 * * *"   # min hora dia mês dia-da-semana (UTC)
-```
-
-## Rodar local (debug)
+## 5. Rodar local
 
 ```bash
 pip install -r requirements.txt
@@ -66,29 +69,30 @@ export SUPABASE_SERVICE_KEY="..."
 python scraper.py
 ```
 
+No PowerShell:
+
+```powershell
+$env:SUPABASE_URL="..."
+$env:SUPABASE_SERVICE_KEY="..."
+python scraper.py
+```
+
 ## Como funciona
 
-1. `SELECT id, oferta_data FROM ofertas` no Supabase
-2. Para cada linha com `linkBiblioteca`:
-   - Abre Chromium headless
-   - Navega na URL e espera o JS renderizar o contador
-   - Extrai via regex (`~4,700 resultados` em PT/FR/EN/ES/DE/IT)
-   - `UPDATE ofertas SET anuncios_ativos = X WHERE id = Y`
-3. Bloqueia imagens/fontes/vídeos pra carregar mais rápido
-4. Reaproveita a mesma aba pra todas as ofertas (mais rápido que abrir uma por vez)
-
-## Quando o Facebook quebra o seletor
-
-A Meta muda o DOM com frequência. O script usa **regex no texto da página**, não
-seletor CSS, justamente pra ser resiliente. Mesmo que mudem a estrutura HTML, o
-texto "X resultados" continua aparecendo. Se um dia mudarem a palavra, é só
-adicionar mais um padrão em `COUNT_PATTERNS`.
+1. Busca ofertas e campos de monitoramento no Supabase.
+2. Filtra o lote do horario atual conforme `ads_monitoring_status`, `ads_zero_since` e `ads_next_check_at`.
+3. Para cada oferta elegivel com `linkBiblioteca`:
+   - abre Chromium headless;
+   - navega na URL;
+   - espera o JS renderizar o contador;
+   - extrai via regex em PT/FR/EN/ES/DE/IT;
+   - atualiza `anuncios_ativos`, historico e estado de monitoramento.
+4. Reaproveita a mesma aba para todas as ofertas.
 
 ## Anti-bot
 
-O FB às vezes pede captcha em IPs muito agressivos. Se isso acontecer:
-- Diminuir a frequência (1x/dia já é bem conservador)
-- Adicionar `page.wait_for_timeout(random.randint(2000, 5000))` entre ofertas
-- Em último caso, usar proxy residencial barato (BrightData, etc)
+O Facebook pode pedir captcha em IPs muito agressivos. Se acontecer:
 
-Pra volume baixo (até ~100 ofertas/dia) você nunca vai ver bloqueio.
+- reduzir a frequencia;
+- adicionar espera aleatoria entre ofertas;
+- em ultimo caso, usar proxy residencial.
