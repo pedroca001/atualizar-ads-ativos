@@ -29,6 +29,12 @@ DAILY_CHECK_HOUR = 12
 DAILY_AFTER_ZERO_DAYS = 2
 INACTIVE_AFTER_ZERO_DAYS = 7
 INACTIVE_CHECK_INTERVAL_DAYS = 3
+SCHEDULE_LOCAL_HOURS = (4, 12, 20)
+SCHEDULE_TO_LOCAL_HOUR = {
+    "0 7 * * *": 4,
+    "0 15 * * *": 12,
+    "0 23 * * *": 20,
+}
 
 STATUS_ACTIVE = "active"
 STATUS_COOLDOWN = "cooldown"
@@ -78,8 +84,29 @@ def next_local_noon(now_utc, days_ahead=1):
     return target_local.astimezone(timezone.utc)
 
 
-def is_noon_run(now_utc):
-    return now_utc.astimezone(BRAZIL_TZ).hour == DAILY_CHECK_HOUR
+def current_run_local_hour(now_utc):
+    explicit_hour = os.environ.get("ADS_RUN_LOCAL_HOUR")
+    if explicit_hour:
+        try:
+            return int(explicit_hour)
+        except ValueError:
+            print(f"invalid ADS_RUN_LOCAL_HOUR={explicit_hour!r}; inferring run slot", file=sys.stderr)
+
+    event_schedule = os.environ.get("GITHUB_EVENT_SCHEDULE")
+    if event_schedule in SCHEDULE_TO_LOCAL_HOUR:
+        return SCHEDULE_TO_LOCAL_HOUR[event_schedule]
+
+    local_now = now_utc.astimezone(BRAZIL_TZ)
+    local_decimal_hour = local_now.hour + (local_now.minute / 60)
+
+    return min(
+        SCHEDULE_LOCAL_HOURS,
+        key=lambda scheduled_hour: (local_decimal_hour - scheduled_hour) % 24,
+    )
+
+
+def is_daily_check_run(now_utc):
+    return current_run_local_hour(now_utc) == DAILY_CHECK_HOUR
 
 
 def should_check_offer(row, now_utc):
@@ -90,18 +117,18 @@ def should_check_offer(row, now_utc):
         return False, f"next check at {next_check_at.isoformat()}"
 
     if status == STATUS_INACTIVE:
-        if not is_noon_run(now_utc):
+        if not is_daily_check_run(now_utc):
             return False, "inactive: only checked at 12h Sao Paulo"
         return True, "inactive: 3-day check"
 
     if status == STATUS_COOLDOWN:
-        if not is_noon_run(now_utc):
+        if not is_daily_check_run(now_utc):
             return False, "0 ads for 2d+: only checked at 12h Sao Paulo"
         return True, "0 ads for 2d+: daily check"
 
     zero_since = parse_datetime(row.get("ads_zero_since"))
     if zero_since and now_utc - zero_since >= timedelta(days=DAILY_AFTER_ZERO_DAYS):
-        if not is_noon_run(now_utc):
+        if not is_daily_check_run(now_utc):
             return False, "0 ads for 2d+: waiting for daily 12h check"
         return True, "0 ads for 2d+: daily check"
 
@@ -243,6 +270,8 @@ def main():
     print(f"{len(rows)} offers in Supabase")
 
     now_utc = datetime.now(timezone.utc)
+    run_hour = current_run_local_hour(now_utc)
+    print(f"run slot: {run_hour:02d}h Sao Paulo")
     targets = []
     skipped = 0
 

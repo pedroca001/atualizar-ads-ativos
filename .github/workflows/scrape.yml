@@ -2,8 +2,15 @@ name: Daily FB Ads Counter
 
 on:
   schedule:
-    - cron: "0 7,15,23 * * *"
+    - cron: "0 7 * * *"
+    - cron: "0 15 * * *"
+    - cron: "0 23 * * *"
   workflow_dispatch:
+    inputs:
+      run_local_hour:
+        description: "Horario local da rodada a simular: 4, 12 ou 20"
+        required: false
+        default: "12"
 
 jobs:
   scrape:
@@ -32,5 +39,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          ADS_RUN_LOCAL_HOUR: ${{ github.event.inputs.run_local_hour }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
           PYTHONUNBUFFERED: "1"
         run: python -u scraper.py

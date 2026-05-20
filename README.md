@@ -45,8 +45,14 @@ O workflow roda todos os dias as **04:00, 12:00 e 20:00 de Brasilia**
 (`07:00, 15:00 e 23:00 UTC`):
 
 ```yaml
-- cron: "0 7,15,23 * * *"
+- cron: "0 7 * * *"
+- cron: "0 15 * * *"
+- cron: "0 23 * * *"
 ```
+
+O GitHub Actions pode atrasar uma execucao agendada. O scraper usa o cron que
+disparou a rodada para manter a cadencia correta mesmo quando a rodada das 12h
+comeca alguns minutos ou horas depois.
 
 O script decide quais ofertas entram no lote de cada horario:
 
@@ -58,6 +64,8 @@ O script decide quais ofertas entram no lote de cada horario:
 ## 4. Testar manualmente
 
 Em **Actions -> Daily FB Ads Counter -> Run workflow**.
+O input `run_local_hour` vem como `12` por padrao para simular a rodada diaria
+do meio-dia e reprocessar ofertas em observacao diaria.
 
 ## 5. Rodar local
 
