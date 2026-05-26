@@ -61,12 +61,12 @@ update public.ofertas o
 set
     ads_zero_since = coalesce(o.ads_zero_since, z.zero_since),
     ads_monitoring_status = case
-        when now() - coalesce(o.ads_zero_since, z.zero_since) >= interval '7 days' then 'inactive'
+        when now() - coalesce(o.ads_zero_since, z.zero_since) >= interval '3 days' then 'inactive'
         when now() - coalesce(o.ads_zero_since, z.zero_since) >= interval '2 days' then 'cooldown'
         else 'active'
     end,
     ads_inactivated_at = case
-        when now() - coalesce(o.ads_zero_since, z.zero_since) >= interval '7 days'
+        when now() - coalesce(o.ads_zero_since, z.zero_since) >= interval '3 days'
             then coalesce(o.ads_inactivated_at, now())
         else null
     end

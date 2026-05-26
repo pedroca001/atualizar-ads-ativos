@@ -4,7 +4,7 @@ FB Ad Library active ads counter.
 Monitoring cadence:
 - active offers: checked on every scheduled run (04h, 12h, 20h Sao Paulo)
 - offers with 0 ads for 2 days: checked once per day at 12h Sao Paulo
-- offers with 0 ads for 7 days: marked inactive and checked every 3 days at 12h Sao Paulo
+- offers with 0 ads for 3 days: marked inactive and checked every 3 days at 12h Sao Paulo
 """
 
 import json
@@ -27,7 +27,7 @@ HISTORY_RETENTION_DAYS = 7
 BRAZIL_TZ = ZoneInfo("America/Sao_Paulo")
 DAILY_CHECK_HOUR = 12
 DAILY_AFTER_ZERO_DAYS = 2
-INACTIVE_AFTER_ZERO_DAYS = 7
+INACTIVE_AFTER_ZERO_DAYS = 3
 INACTIVE_CHECK_INTERVAL_DAYS = 3
 SCHEDULE_LOCAL_HOURS = (4, 12, 20)
 SCHEDULE_TO_LOCAL_HOUR = {

@@ -58,7 +58,7 @@ O script decide quais ofertas entram no lote de cada horario:
 
 - ofertas ativas: verificadas nas 3 execucoes do dia;
 - ofertas com 0 ads por 2 dias: verificadas 1x/dia ao meio-dia;
-- ofertas com 0 ads por 7 dias: marcadas como inativas e verificadas 1x a cada 3 dias ao meio-dia;
+- ofertas com 0 ads por 3 dias: marcadas como inativas e verificadas 1x a cada 3 dias ao meio-dia;
 - se uma oferta volta a ter ads ativos, ela retorna automaticamente para o status ativo.
 
 ## 4. Testar manualmente
