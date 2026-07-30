@@ -54,6 +54,13 @@ O GitHub Actions pode atrasar uma execucao agendada. O scraper usa o cron que
 disparou a rodada para manter a cadencia correta mesmo quando a rodada das 12h
 comeca alguns minutos ou horas depois.
 
+Como este repositorio e publico, o GitHub desativa workflows agendados depois
+de 60 dias sem atividade. O workflow `Keep scheduled scraper active` roda
+semanalmente e cria um commit tecnico somente quando o ultimo commit completa
+45 dias. Assim, o scraper nao volta a ser desativado silenciosamente. O
+workflow pode ser executado manualmente para validar o gate, mas nao cria
+commit quando o repositorio ainda esta dentro da janela de 45 dias.
+
 O script decide quais ofertas entram no lote de cada horario:
 
 - ofertas ativas: verificadas nas 3 execucoes do dia;
