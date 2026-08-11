@@ -35,6 +35,10 @@ Campos principais lidos ou atualizados:
 
 Tabela de historico: `oferta_ads_leituras`.
 
+As leituras ficam retidas por 14 dias. Para recuperar slots ainda disponiveis
+nos logs do GitHub Actions sem duplicar pontos, use
+`scripts/backfill_ads_history.py` primeiro em dry-run e depois com `--apply`.
+
 Antes de publicar esta alteracao em um projeto existente, rode o SQL em
 `supabase_ads_monitoring_cadence.sql` no Supabase SQL editor. Para setups novos,
 `supabase_ads_history.sql` ja contem o schema consolidado.
