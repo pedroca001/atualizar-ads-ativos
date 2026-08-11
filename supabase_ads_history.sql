@@ -175,4 +175,4 @@ set
 where coalesce(anuncios_ativos, 0) > 0;
 
 delete from public.oferta_ads_leituras
-where lido_em < now() - interval '7 days';
+where lido_em < now() - interval '14 days';

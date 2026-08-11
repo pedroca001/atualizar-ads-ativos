@@ -22,7 +22,7 @@ SUPABASE_URL = os.environ["SUPABASE_URL"]
 SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 TABLE = "ofertas"
 HISTORY_TABLE = "oferta_ads_leituras"
-HISTORY_RETENTION_DAYS = 7
+HISTORY_RETENTION_DAYS = 14
 
 BRAZIL_TZ = ZoneInfo("America/Sao_Paulo")
 DAILY_CHECK_HOUR = 12
